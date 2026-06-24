@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv-workers/
+.python-version
+
+# uv  (uv.lock is committed for reproducible installs)
+
+# Cloudflare / wrangler / pywrangler
+.wrangler/
+python_modules/
+node_modules/
+.secrets
+.dev.vars
+.env
+
+# provisioner SSH key
+*.pem
+
+# scratch / working files
+tmp/

@@ -1,0 +1,14 @@
+[project]
+name = "myxray"
+version = "0.1.0"
+description = "Cloudflare Python Worker that resolves an Xray VM IP on AWS and returns an Xray share URL"
+requires-python = ">=3.12"
+# Runtime deps are deliberately minimal. The core (EC2 lookup + SigV4) uses only
+# the stdlib + the JS `fetch` interop. `segno` (pure Python, dependency-free) is
+# used only to render the QR-code page for ?mode=qr.
+dependencies = ["segno"]
+
+[dependency-groups]
+# workers-py provides the `pywrangler` CLI; workers-runtime-sdk provides the
+# Workers runtime type stubs used by `pywrangler types` / editor autocomplete.
+dev = ["workers-py", "workers-runtime-sdk"]

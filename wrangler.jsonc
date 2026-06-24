@@ -1,0 +1,53 @@
+{
+  // Cloudflare Workers configuration (Python Worker).
+  // Docs: https://developers.cloudflare.com/workers/languages/python/
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "xsubs",
+  "main": "src/entry.py",
+
+  // Python Workers are gated behind this compatibility flag while in open beta.
+  "compatibility_flags": ["python_workers"],
+  "compatibility_date": "2026-06-22",
+
+  "observability": {
+    "enabled": true
+  },
+
+  // Per-server profiles (PIN -> {region, name, uuid, pbk, sid}) live in this KV
+  // namespace, one JSON value per key "pin:<PIN>". Keeps the per-server Xray
+  // credentials (uuid/sid) out of the git repo. Create the namespace once with
+  //   uv run pywrangler kv namespace create XRAY_KV
+  // and paste the printed id below. Managed by scripts/xray.py.
+  "kv_namespaces": [
+    { "binding": "XRAY_KV", "id": "ea5f8a8ca83e4ca3b775f4165702f7dd" }
+  ],
+
+  // Serve on the free workers.dev URL (no DNS record needed):
+  //   https://xsubs.<your-account-subdomain>.workers.dev
+  "workers_dev": true,
+
+  // --- Optional custom domain via DNS (disabled) ---
+  // To also serve on a hostname like xsubs.vino9.net (in addition to / instead
+  // of the workers.dev URL), do BOTH of these:
+  //
+  //   1. In the Cloudflare dashboard for the zone (vino9.net):
+  //        DNS > Records > Add record
+  //          Type    : AAAA            (or A)
+  //          Name    : xsubs           (the subdomain label)
+  //          Content : 100::           (or 192.0.2.1 for A) -- a placeholder;
+  //                                      the value is never contacted
+  //          Proxy   : Proxied (orange cloud)  <-- REQUIRED. DNS-only (grey)
+  //                                      bypasses the Worker and will NOT work.
+  //   2. Uncomment the "routes" block below (zone_name must match the zone),
+  //      then run: uv run pywrangler deploy
+  //
+  // You may keep "workers_dev": true as well -- both URLs can be live at once.
+  // "routes": [
+  //   { "pattern": "xsubs.vino9.net/*", "zone_name": "vino9.net" }
+  // ],
+
+  // --- Secrets (do NOT put these here; set them with `pywrangler secret put`) ---
+  //   AWS_ACCESS_KEY_ID
+  //   AWS_SECRET_ACCESS_KEY
+  //   AWS_SESSION_TOKEN     (optional, only for temporary STS credentials)
+}
