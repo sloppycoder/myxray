@@ -491,7 +491,13 @@ def worker_base() -> str:
 
 
 def client_url(pin: str) -> str:
-    return f"{worker_base()}/?pin={pin}"
+    """Subscription / plain-URL endpoint: GET /<pin>."""
+    return f"{worker_base()}/{pin}"
+
+
+def qr_url(pin: str) -> str:
+    """QR-page endpoint (with a Start button when the VM is stopped): /<pin>/qr."""
+    return f"{worker_base()}/{pin}/qr"
 
 
 # --------------------------------------------------------------------------- #
@@ -584,7 +590,8 @@ def cmd_new(args) -> None:
     if kv_ok:
         print("\nNEXT STEPS: profile is in KV (no redeploy). Verify once Xray is up")
         print("  (~1-2 min after boot; allow a few s for KV to propagate):")
-        print(f"       curl '{client_url(pin)}'")
+        print(f"       curl '{client_url(pin)}'                # subscription URL")
+        print(f"       open '{qr_url(pin)}'   # QR page (scan from the client)")
     else:
         print("\nNEXT STEPS: KV was UNREACHABLE — no client profile was written, so the")
         print("  Worker can't serve this server yet. Add the profile when you have")
@@ -616,7 +623,8 @@ def cmd_status(args) -> None:
             print(f"  pin {pin}")
             if state == "running" and ip:
                 print("\nClient config (fresh IP):")
-                print(f"       curl '{client_url(pin)}'")
+                print(f"       curl '{client_url(pin)}'                # subscription URL")
+                print(f"       open '{qr_url(pin)}'   # QR page")
         elif kv_reachable():
             print("  (no KV profile targets this region — clients can't select it yet)")
     print("=" * 76)
@@ -650,7 +658,8 @@ def cmd_start(args) -> None:
     if pin is None and kv_reachable():
         pin = pin_for_region(region)
     if pin:
-        print(f"\nClient config (fresh IP):\n       curl '{client_url(pin)}'")
+        print(f"\nClient config (fresh IP):\n       curl '{client_url(pin)}'"
+              f"                # subscription URL\n       open '{qr_url(pin)}'   # QR page")
 
 
 def cmd_stop(args) -> None:

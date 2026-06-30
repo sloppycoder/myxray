@@ -19,35 +19,29 @@ the `workers-py` package).
 
 ## What it does
 
-A request to the Worker:
+The PIN lives in the **URL path**, and the path also selects the output:
 
 ```
-GET https://xsubs.<your-subdomain>.workers.dev/?pin=2580
+GET  https://xsubs.<your-subdomain>.workers.dev/2580        # plain-text share URL
+GET  https://xsubs.<your-subdomain>.workers.dev/2580/qr     # HTML QR page (+ Start button)
+POST https://xsubs.<your-subdomain>.workers.dev/2580/boot   # start a stopped VM (async)
 ```
 
-1. **Validate `pin`.** The PIN selects a server profile, fetched from the
-   `XRAY_KV` namespace at key `pin:<PIN>` (a single KV read): its AWS region,
-   Xray UUID, REALITY public key + short id, and display name. Unknown PINs are
-   rejected with `403`.
-2. **Resolve the VM.** Using the profile's region, the Worker calls the EC2 API
-   to find the instance tagged `Name=xray`:
-   - **running** → use its public IP.
-   - **stopped** → `StartInstances`, then poll until it is `running` with a
-     public IP (up to ~90s).
-   - **not found** → abort with `404`.
-3. **Build the URL.** The public IP is combined with the profile's Xray
-   credentials and the common parameters (`config.SNI`, `config.XRAY_PORT`, …)
-   into a `vless://…` share URL.
-4. **Return** the result: `mode=url` (default) sends the URL as `text/plain` for
-   the Xray client to import; `mode=qr` sends a self-contained HTML page with the
-   URL rendered as a scannable QR code (inline SVG, generated server-side).
+Every route first **validates the `pin`** (the first path segment): it selects a
+server profile, fetched from the `XRAY_KV` namespace at key `pin:<PIN>` (a single
+KV read) — its AWS region, Xray UUID, REALITY public key + short id, and display
+name. Unknown PINs are rejected with `403`.
 
-### Parameters
+### Routes
 
-| Query param | Meaning | Example |
-|-------------|---------|---------|
-| `pin`       | Client PIN; selects the server profile (region + Xray credentials) | `2580` |
-| `mode`      | Output format: `url` (plain text, **default**) or `qr` (HTML page with an embedded, scannable QR code) | `qr` |
+| Route | What it does |
+|-------|--------------|
+| `GET /<pin>` | **Subscription / plain-URL endpoint.** Resolves the `Name=xray` VM in the profile's region. **Running** → builds the `vless://…` share URL (public IP + the profile's Xray credentials + common params from `config.SNI`/`config.XRAY_PORT`/…) and returns it as `text/plain`. **Not running / absent** → `404`. **Never boots the VM** — so a routine subscription refresh can't wake (and bill) a stopped instance. |
+| `GET /<pin>/qr` | **QR page.** VM **running** → a self-contained HTML page with the share URL rendered as a scannable QR code (inline SVG, generated server-side). VM **not running** → an HTML page with a **Start** button: pressing it `POST`s to `/<pin>/boot`, then polls `GET /<pin>` until the VM is ready and reloads to show the QR. |
+| `POST /<pin>/boot` | **Boot a stopped VM.** Fires `StartInstances` (if the VM is stopped) and returns **immediately** (`202 {"state":"pending"}`) — it does *not* wait for the IP. The waiting/polling happens client-side on the QR page. A running VM returns `200 {"state":"running"}`. |
+
+Booting is therefore **opt-in and interactive** (the QR page's button → `POST
+/boot`), never a side effect of fetching a subscription.
 
 ### PINs → servers
 
@@ -63,14 +57,18 @@ repo. (None are provisioned right now.)
 
 ### Responses
 
+All responses are sent `Cache-Control: no-store` (the IP changes on VM reboot).
+
 | Status | When |
 |--------|------|
-| `200`  | `mode=url`: plain-text `vless://…` URL · `mode=qr`: HTML page with a QR code (both sent `Cache-Control: no-store`, since the IP changes on VM reboot) |
-| `400`  | Missing `pin`, or unknown `mode` |
+| `200`  | `GET /<pin>`: plain-text `vless://…` URL · `GET /<pin>/qr`: HTML (QR or Start page) · `POST /<pin>/boot`: `{"state":"running"}` |
+| `202`  | `POST /<pin>/boot`: `StartInstances` fired (or VM already booting) — `{"state":"pending"}` |
+| `400`  | Missing `pin` in the path |
 | `403`  | Unknown `pin` |
-| `404`  | No `xray` VM in the profile's region |
+| `404`  | Unknown route/action, wrong VM, or (on `GET /<pin>`) no running `xray` VM in the profile's region |
+| `405`  | Wrong HTTP method for the route (e.g. `GET /<pin>/boot`, or `POST /<pin>`) |
 | `500`  | Missing AWS credentials / unexpected error |
-| `502`  | EC2 API error or VM never became ready |
+| `502`  | EC2 API error |
 
 ---
 
@@ -95,7 +93,7 @@ myxray/
 │   ├── config.py       # common Xray params + share-URL builder
 │   ├── aws_ec2.py      # EC2 describe/start over fetch; boot-and-poll logic
 │   ├── sigv4.py        # AWS SigV4 request signing (stdlib only)
-│   └── render.py       # QR-code HTML page (segno inline SVG) for ?mode=qr
+│   └── render.py       # QR page (running) + Start page (stopped) for /<pin>/qr
 ├── scripts/
 │   ├── aws_role.sh         # create/verify the xray-ops IAM user + policy
 │   ├── xray.py             # manage Xray VMs: new/status/start/stop/delete (PEP 723)
@@ -222,7 +220,7 @@ uv run pywrangler deploy
 
 # 6. provision a server (writes its profile into KV), then verify
 uv run scripts/xray.py new --region us-west-2 --name US
-curl "https://xsubs.<your-subdomain>.workers.dev/?pin=<printed-pin>"
+curl "https://xsubs.<your-subdomain>.workers.dev/<printed-pin>"
 ```
 
 **Redeploy** after any code/config change is just `uv run pywrangler deploy` —
@@ -238,7 +236,7 @@ a build without publishing with `uv run pywrangler deploy --dry-run`.
 uv run pywrangler dev
 
 # Try it
-curl "http://localhost:8787/?pin=2580"
+curl "http://localhost:8787/2580"
 
 # Deploy to Cloudflare
 uv run pywrangler deploy
@@ -251,7 +249,7 @@ uv run pywrangler tail
 ```
 
 After `uv run pywrangler deploy`, the Worker is reachable at
-`https://xsubs.<your-subdomain>.workers.dev/?pin=...`.
+`https://xsubs.<your-subdomain>.workers.dev/<pin>`.
 
 ### Custom domain (optional — currently disabled)
 
@@ -288,7 +286,7 @@ provisions TLS for the hostname automatically.
 uv run pywrangler deploy
 ```
 
-It then answers at `https://xsubs.vino9.net/?pin=2580`.
+It then answers at `https://xsubs.vino9.net/2580`.
 
 > If the route doesn't take effect, the usual cause is the DNS record being set
 > to **DNS-only (grey cloud)** — toggle it to **Proxied**.
@@ -359,7 +357,7 @@ uv run scripts/xray.py new --region us-west-2      --name US
 uv run scripts/xray.py new --region tokyo          --name Tokyo --pin 1470
 uv run scripts/xray.py new --region eu-central-1   --name EU --dry-run   # preview
 # verify (note the printed PIN; allow ~1-2 min for Xray to finish installing)
-curl "https://xsubs.<your-subdomain>.workers.dev/?pin=<pin>"
+curl "https://xsubs.<your-subdomain>.workers.dev/<pin>"
 ```
 
 What it does (no SSH needed for setup):
@@ -491,7 +489,7 @@ aws iam delete-access-key --user-name xray-ops --access-key-id <OLD_ID>
 
 ```bash
 uv run pywrangler tail                                      # stream live logs + errors
-curl "https://xsubs.<your-subdomain>.workers.dev/?pin=<pin>"            # exercise it
+curl "https://xsubs.<your-subdomain>.workers.dev/<pin>"            # exercise it
 ```
 
 ### Verify the AWS lookup locally (without deploying)
@@ -533,11 +531,31 @@ Cloudflare dashboard (not needed for the workers.dev setup).
 
 ## Using it from Hiddify (or another Xray client)
 
-The Worker returns a single `vless://…` line. Either:
+There are two main workflows. Pick one (the QR flow is friendliest when the VM
+might be stopped, since it can start it for you):
 
-- Paste the URL printed by `curl`/the browser directly into the client, **or**
-- Point the client's *subscription* URL at the Worker endpoint
-  (`https://xsubs.<subdomain>.workers.dev/?pin=2580`) so it re-fetches a fresh IP
-  each time the VM is rebooted, **or**
-- Open `…/?pin=2580&mode=qr` in a browser to get a scannable QR-code page and
-  import it into the phone app with the camera.
+**1. QR page (boot, if needed, then scan).**
+Open the QR page in a browser:
+
+```
+https://xsubs.<subdomain>.workers.dev/2580/qr
+```
+
+- VM **running** → it shows a scannable QR. Open Hiddify (or any Xray client) and
+  scan it with the in-app camera to import the config.
+- VM **stopped** → it shows a **Start server** button. Press it; the page boots
+  the VM, waits for the public IP, then displays the QR — then scan as above.
+
+**2. Subscription URL (paste into the client).**
+Open the client and add a *subscription* pointing at the plain endpoint:
+
+```
+https://xsubs.<subdomain>.workers.dev/2580
+```
+
+The client re-fetches this on refresh and always gets a fresh IP (the Worker
+resolves it live on every request), so the config keeps working across VM
+reboots. Note this endpoint **never boots the VM** — if the VM is stopped the
+fetch returns `404`; start it first via the QR page's button (or
+`scripts/xray.py start`). You can also paste the single `vless://…` line that
+this endpoint / `curl` prints directly into the client instead of subscribing.
